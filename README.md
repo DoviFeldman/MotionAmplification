@@ -1,6 +1,9 @@
 # MotionAmplification
 
 
+website link to use!! 
+https://dovifeldman.github.io/MotionAmplification/ 
+
 FIXED IT!! 
 GROK THINKING FIXED IT!!! 
 
