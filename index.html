@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motion Amplifier</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .video-container {
+            position: relative;
+            flex: 1;
+            width: 100%;
+            height: calc(100vh - 80px);
+            overflow: hidden;
+        }
+
+        #liveVideo, #delayedVideo {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #delayedVideo {
+            opacity: 0.5;
+            filter: invert(1);
+            mix-blend-mode: difference;
+        }
+
+        .controls {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .slider-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        label {
+            color: white;
+            font-size: 14px;
+            white-space: nowrap;
+        }
+
+        #delaySlider {
+            flex: 1;
+            height: 30px;
+            background: transparent;
+            outline: none;
+            -webkit-appearance: none;
+        }
+
+        #delaySlider::-webkit-slider-track {
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+        }
+
+        #delaySlider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        #delaySlider::-moz-range-track {
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            border: none;
+        }
+
+        #delaySlider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+
+        .delay-value {
+            color: white;
+            font-size: 14px;
+            min-width: 60px;
+            text-align: right;
+        }
+
+        .error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .start-button {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 18px;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+
+        .start-button:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="video-container">
+        <video id="liveVideo" autoplay muted playsinline></video>
+        <video id="delayedVideo" autoplay muted playsinline></video>
+        <button id="startButton" class="start-button">Start Camera</button>
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <div class="controls">
+        <div class="slider-container">
+            <label for="delaySlider">Delay:</label>
+            <input type="range" id="delaySlider" min="1" max="60" value="5" step="1">
+            <span class="delay-value" id="delayValue">5 frames</span>
+        </div>
+    </div>
+
+    <script>
+        let mediaStream = null;
+        let frameBuffer = [];
+        let delayFrames = 5;
+        let frameRate = 30; // Assuming 30fps
+        let isRecording = false;
+
+        const liveVideo = document.getElementById('liveVideo');
+        const delayedVideo = document.getElementById('delayedVideo');
+        const startButton = document.getElementById('startButton');
+        const delaySlider = document.getElementById('delaySlider');
+        const delayValue = document.getElementById('delayValue');
+        const errorDiv = document.getElementById('error');
+
+        // Update delay value display
+        delaySlider.addEventListener('input', (e) => {
+            delayFrames = parseInt(e.target.value);
+            updateDelayDisplay();
+        });
+
+        function updateDelayDisplay() {
+            const seconds = (delayFrames / frameRate).toFixed(2);
+            delayValue.textContent = `${delayFrames} frames (${seconds}s)`;
+        }
+
+        // Start camera
+        startButton.addEventListener('click', async () => {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: false
+                });
+
+                liveVideo.srcObject = mediaStream;
+                startButton.style.display = 'none';
+                errorDiv.style.display = 'none';
+
+                // Start the frame capture process
+                liveVideo.addEventListener('loadedmetadata', () => {
+                    startFrameCapture();
+                });
+
+            } catch (err) {
+                showError('Camera access denied or not available. Please allow camera access and try again.');
+            }
+        });
+
+        function startFrameCapture() {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = liveVideo.videoWidth;
+            canvas.height = liveVideo.videoHeight;
+
+            const delayedCanvas = document.createElement('canvas');
+            const delayedCtx = delayedCanvas.getContext('2d');
+            delayedCanvas.width = canvas.width;
+            delayedCanvas.height = canvas.height;
+
+            // Create MediaStream from delayed canvas
+            const delayedStream = delayedCanvas.captureStream(frameRate);
+            delayedVideo.srcObject = delayedStream;
+
+            function captureFrame() {
+                if (!mediaStream) return;
+
+                // Draw current frame to canvas
+                ctx.drawImage(liveVideo, 0, 0, canvas.width, canvas.height);
+                
+                // Get image data
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                
+                // Add to buffer with timestamp
+                frameBuffer.push({
+                    data: imageData,
+                    timestamp: Date.now()
+                });
+
+                // Keep buffer size manageable (max 2 seconds worth of frames)
+                const maxBufferSize = frameRate * 2;
+                if (frameBuffer.length > maxBufferSize) {
+                    frameBuffer.shift();
+                }
+
+                // Show delayed frame if we have enough frames
+                if (frameBuffer.length >= delayFrames) {
+                    const delayedFrame = frameBuffer[frameBuffer.length - delayFrames];
+                    delayedCtx.putImageData(delayedFrame.data, 0, 0);
+                }
+
+                requestAnimationFrame(captureFrame);
+            }
+
+            captureFrame();
+        }
+
+        function showError(message) {
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            startButton.style.display = 'block';
+        }
+
+        // Initialize delay display
+        updateDelayDisplay();
+
+        // Handle page visibility changes to pause/resume
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && mediaStream) {
+                // Pause when tab is hidden
+                mediaStream.getVideoTracks().forEach(track => track.enabled = false);
+            } else if (mediaStream) {
+                // Resume when tab is visible
+                mediaStream.getVideoTracks().forEach(track => track.enabled = true);
+            }
+        });
+    </script>
+</body>
+</html>
